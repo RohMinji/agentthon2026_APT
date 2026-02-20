@@ -105,15 +105,16 @@ def load_apartment_dataframe(csv_path: str | Path = "./data/apt_basic_info.csv")
     real_estate_db['거래금액(만원)'] = real_estate_db['거래금액(만원)'].str.replace(',' ,'').astype(int)
 
     real_estate_db = real_estate_db[[
-        '도로명', '단지명', '전용면적(㎡)', '거래금액(만원)'
+        '도로명', '단지명', '전용면적(㎡)', '거래금액(만원)', '건축년도'
     ]]
-    real_estate_db.columns = ['도로명주소', '단지명', '전용면적', '거래금액(만원)']
+    real_estate_db.columns = ['도로명주소', '단지명', '전용면적', '거래금액(만원)', '건축년도']
 
     apt_db_F = pd.merge(real_estate_db, df, on='도로명주소', how='left')
     apt_db_F = apt_db_F.drop(apt_db_F[apt_db_F['아파트명'].isnull()].index, axis=0).reset_index(drop=True)
     apt_db_F["전용면적"] = pd.to_numeric(apt_db_F["전용면적"], errors="coerce")
     apt_db_F["거래금액(만원)"] = pd.to_numeric(apt_db_F["거래금액(만원)"], errors="coerce")
     apt_db_F = apt_db_F.dropna(subset=["전용면적", "거래금액(만원)"]).reset_index(drop=True)
+    apt_db_F['연차'] = 2027 - apt_db_F['건축년도']
 
     return apt_db_F[
         [
@@ -167,6 +168,71 @@ class ApartmentSearchTool:
         if not intersection:
             return "__NO_MATCH__"
         return ",".join(intersection)
+
+    @staticmethod
+    def _expand_clear_filter_aliases(fields: list[str]) -> list[str]:
+        alias_map = {
+            "가격": ["min_price_eok", "max_price_eok", "min_price_10k_krw", "max_price_10k_krw"],
+            "금액": ["min_price_eok", "max_price_eok", "min_price_10k_krw", "max_price_10k_krw"],
+            "price": ["min_price_eok", "max_price_eok", "min_price_10k_krw", "max_price_10k_krw"],
+            "price_filter": ["min_price_eok", "max_price_eok", "min_price_10k_krw", "max_price_10k_krw"],
+            "면적": ["min_exclusive_area", "max_exclusive_area", "target_exclusive_area", "exclusive_area_mode", "area_tolerance"],
+            "전용면적": ["min_exclusive_area", "max_exclusive_area", "target_exclusive_area", "exclusive_area_mode", "area_tolerance"],
+            "area": ["min_exclusive_area", "max_exclusive_area", "target_exclusive_area", "exclusive_area_mode", "area_tolerance"],
+            "연식": ["min_age", "max_age"],
+            "연차": ["min_age", "max_age"],
+            "age": ["min_age", "max_age"],
+            "세대수": ["min_households", "max_households"],
+            "households": ["min_households", "max_households"],
+            "위치": ["si_do", "si_gungu", "eupmyeondong"],
+            "지역": ["si_do", "si_gungu", "eupmyeondong"],
+            "location": ["si_do", "si_gungu", "eupmyeondong"],
+            "난방": ["heating_type"],
+            "heating": ["heating_type"],
+            "복도": ["corridor_type"],
+            "corridor": ["corridor_type"],
+        }
+        valid_filter_keys = {
+            "si_do",
+            "si_gungu",
+            "eupmyeondong",
+            "corridor_type",
+            "heating_type",
+            "min_households",
+            "max_households",
+            "min_parking_per_household",
+            "max_parking_per_household",
+            "min_age",
+            "max_age",
+            "min_exclusive_area",
+            "max_exclusive_area",
+            "target_exclusive_area",
+            "exclusive_area_mode",
+            "area_tolerance",
+            "min_price_10k_krw",
+            "max_price_10k_krw",
+            "min_price_eok",
+            "max_price_eok",
+        }
+        expanded: list[str] = []
+        for field in fields:
+            normalized = field.strip().lower().replace(" ", "_")
+            if normalized in alias_map:
+                expanded.extend(alias_map[normalized])
+                continue
+
+            matched = False
+            for alias, mapped_keys in alias_map.items():
+                if alias and alias in normalized:
+                    expanded.extend(mapped_keys)
+                    matched = True
+            if matched:
+                continue
+
+            if field.strip() in valid_filter_keys:
+                expanded.append(field.strip())
+        # Deduplicate while keeping order.
+        return list(dict.fromkeys([x for x in expanded if x]))
 
     def _merge_filters_append(self, previous: dict, current: dict) -> dict:
         merged = dict(previous)
@@ -303,15 +369,19 @@ class ApartmentSearchTool:
         reset_memory: Annotated[
             bool, Field(description="현재 thread_id의 누적 필터를 초기화할지 여부")
         ] = False,
+        confirm_reset: Annotated[
+            bool, Field(description="reset_memory 적용 확인 여부. true일 때만 초기화")
+        ] = False,
         clear_filters: Annotated[
             str | None,
             Field(
                 description=(
-                    "누적 필터에서 제거할 필드명 목록(콤마 구분). "
+                    "누적 필터에서 제거할 필드명/조건명/문구 목록(콤마 구분). "
                     "예: max_price_eok,min_exclusive_area"
+                    "예: 연차,난방 / '면적 조건 빼줘'"
                 )
             ),
-        ] = None,
+        ] = None
     ) -> str:
         """아파트 조건 검색 도구. 전달된 조건으로 데이터프레임을 필터링해 결과를 반환한다."""
         memory_key = "_default"
@@ -325,7 +395,7 @@ class ApartmentSearchTool:
         if mode == "replace" and not reset_memory:
             mode = "append"
 
-        if reset_memory:
+        if reset_memory and confirm_reset:
             self._filter_memory.pop(memory_key, None)
 
         current_filters = {
@@ -362,6 +432,7 @@ class ApartmentSearchTool:
             merged_filters = dict(specified)
 
         fields_to_clear = self._split_values(clear_filters)
+        fields_to_clear = self._expand_clear_filter_aliases(fields_to_clear)
         for field_name in fields_to_clear:
             merged_filters.pop(field_name, None)
 
@@ -502,8 +573,19 @@ class ApartmentSearchTool:
         thread_id: Annotated[
             str | None, Field(description="초기화할 대화 스레드 식별자. 미입력 시 기본값")
         ] = None,
+        confirm_reset: Annotated[
+            bool, Field(description="초기화 확인 여부. true일 때만 실제 초기화")
+        ] = False,
     ) -> str:
         memory_key = thread_id or "_default"
+        if not confirm_reset:
+            return pd.Series(
+                {
+                    "thread_id": memory_key,
+                    "status": "skipped",
+                    "reason": "confirm_reset=true required",
+                }
+            ).to_json(force_ascii=False)
         self._filter_memory.pop(memory_key, None)
         return pd.Series({"thread_id": memory_key, "status": "reset"}).to_json(force_ascii=False)
 
@@ -528,9 +610,10 @@ def create_apartment_search_agent(
             "'상위 N건' 형태로 표를 보여줘라. "
             "멀티턴 대화에서는 반드시 같은 thread_id를 유지해서 호출해라. "
             "이전 조건에 추가 조건이면 memory_mode='append'를 사용해라. "
-            "완전히 새 조건은 먼저 reset_apartment_search_memory를 호출한 뒤 다시 검색해라. "
             "사용자가 '초기화'를 요청하면 reset_apartment_search_memory를 호출해라. "
-            "사용자가 특정 조건만 빼달라고 하면 memory_mode='append'에서 clear_filters에 해당 필드명을 넣어라. "
+            "사용자가 특정 조건만 빼거나 제외 해달라고 하면 memory_mode='append'에서 clear_filters를 사용해라. "
+            "예: '금액 필터 빼줘', '연차 조건 제외', '난방 조건 제거'"
+            "search_apartments 호출 시에는 reset_memory를 사용하지 말아라(필요시 confirm_reset=true가 있어야 동작). "
             "주의: 일반 대화에서는 memory_mode='replace'를 사용하지 말고 append를 유지해라. "
             "사용자가 전용면적을 말하면 target_exclusive_area 또는 면적 범위(min_exclusive_area/max_exclusive_area)로 매핑하라. "
             "예: 전용 84는 target_exclusive_area=84. '84 이상'은 min_exclusive_area=84 또는 "
@@ -539,6 +622,7 @@ def create_apartment_search_agent(
             "가격 조건은 거래금액(만원) 또는 억원(min_price_eok/max_price_eok)으로 넣어라. "
             "예: 20억 미만은 max_price_eok=20. "
             "20억과 2억을 혼동하지 말고, 억 단위는 항상 정확한 숫자로 다시 확인해서 설명해라."
+            "사용자가 사용하지 않은 필터 중에 추가 하면 좋다고 판단되는 필터는 역으로 사용할 것을 제안해라. 예를 들어, 500 세대 이상으로 찾아보는 건 어떨까요?"
         ),
         tools=[search_tool.search_apartments, search_tool.reset_apartment_search_memory],
     )
