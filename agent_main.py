@@ -35,6 +35,7 @@ FILTER_SCHEMA = {
         "si_gungu": {"type": ["string", "null"]},
         "eupmyeondong": {"type": ["string", "null"]},
         "corridor_type": {"type": ["string", "null"], "enum": ["계단식", "복도식", None]},
+        "elementary_yn": {"type": ["string", "null"], "enum": ["Y", "N", None]},
         "heating_type": {"type": ["string", "null"], "enum": ["개별난방", "지역난방", "중앙난방", None]},
         "min_households": {"type": ["integer", "null"]},
         "max_households": {"type": ["integer", "null"]},
@@ -48,7 +49,7 @@ FILTER_SCHEMA = {
         "max_price_eok": {"type": ["number", "null"]},
     },
     "required": [
-        "si_do","si_gungu","eupmyeondong","corridor_type","heating_type",
+        "si_do","si_gungu","eupmyeondong","corridor_type","elementary_yn","heating_type",
         "min_households","max_households","min_parking_per_household","max_parking_per_household",
         "min_age","max_age","min_exclusive_area","max_exclusive_area","min_price_eok","max_price_eok"
     ],
