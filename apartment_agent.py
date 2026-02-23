@@ -16,7 +16,7 @@ except ImportError:
         return _decorator
 
 
-def load_apartment_dataframe(csv_path: str | Path = "./data/apt_basic_info.csv") -> pd.DataFrame:
+def load_apartment_dataframe(csv_path: str | Path = "./data/apt_basic_info_school.csv") -> pd.DataFrame:
     """Load and normalize apartment data into the query schema used by the agent tool."""
     columns = [
         "k-아파트명",
@@ -41,9 +41,10 @@ def load_apartment_dataframe(csv_path: str | Path = "./data/apt_basic_info.csv")
         "단지승인일",
         "좌표X",
         "좌표Y",
+        "초품아"
     ]
 
-    df = pd.read_csv(csv_path, encoding="cp949")[columns]
+    df = pd.read_csv(csv_path)[columns] # , encoding="cp949"
     df.columns = [
         "아파트명",
         "단지분류",
@@ -67,6 +68,7 @@ def load_apartment_dataframe(csv_path: str | Path = "./data/apt_basic_info.csv")
         "단지승인일",
         "좌표X",
         "좌표Y",
+        "초품아"
     ]
 
     df = df.drop(df[df["주차대수"] == 0].index, axis=0)
@@ -137,6 +139,7 @@ def load_apartment_dataframe(csv_path: str | Path = "./data/apt_basic_info.csv")
             "좌표Y",
             "주차대수_세대당",
             "연차",
+            "초품아"
         ]
     ].copy()
 
@@ -191,12 +194,14 @@ class ApartmentSearchTool:
             "heating": ["heating_type"],
             "복도": ["corridor_type"],
             "corridor": ["corridor_type"],
+            "초품아":  ["elementary_yn"]
         }
         valid_filter_keys = {
             "si_do",
             "si_gungu",
             "eupmyeondong",
             "corridor_type",
+            "elementary_yn",
             "heating_type",
             "min_households",
             "max_households",
@@ -244,7 +249,7 @@ class ApartmentSearchTool:
                 merged[key] = self._intersect_csv_values(merged.get(key), value)
                 continue
 
-            if key in {"corridor_type", "heating_type"}:
+            if key in {"corridor_type", "heating_type", "elementary_yn"}:
                 if merged.get(key) is None:
                     merged[key] = value
                 elif merged.get(key) != value:
@@ -317,6 +322,10 @@ class ApartmentSearchTool:
         corridor_type: Annotated[
             str | None,
             Field(description="복도유형. 허용값: 계단식, 복도식"),
+        ] = None,
+        elementary_yn: Annotated[
+            str | None,
+            Field(description="초품아(초등학교가 인근에 위치하였는지 여부). 허용값: Y, N"),
         ] = None,
         heating_type: Annotated[
             str | None,
@@ -403,6 +412,7 @@ class ApartmentSearchTool:
             "si_gungu": si_gungu,
             "eupmyeondong": eupmyeondong,
             "corridor_type": corridor_type,
+            "elementary_yn": elementary_yn,
             "heating_type": heating_type,
             "min_households": min_households,
             "max_households": max_households,
@@ -479,6 +489,10 @@ class ApartmentSearchTool:
         if corridor_type:
             df = df[df["복도유형"] == corridor_type]
 
+        elementary_yn = merged_filters.get("elementary_yn")
+        if elementary_yn:
+            df = df[df["초품아"] == elementary_yn]
+
         heating_type = merged_filters.get("heating_type")
         if heating_type:
             df = df[df["난방방식"] == heating_type]
@@ -530,24 +544,30 @@ class ApartmentSearchTool:
 
         limit = int(merged_filters.get("limit", 100))
         if df.empty:
-            return (
-                '{"total_count": 0, "returned_count": 0, "limit": 0, '
-                f'"thread_id": "{memory_key}", "memory_mode": "{mode}", "applied_filters": '
-                f'{pd.Series(merged_filters).to_json(force_ascii=False)}, "rows": []}}'
-            )
+            payload = {
+                "total_count": 0,
+                "returned_count": 0,
+                "limit": 0,
+                "thread_id": memory_key,
+                "memory_mode": mode,
+                "applied_filters": merged_filters,
+                "rows": [],
+            }
+            return pd.Series(payload).to_json(force_ascii=False)
 
         show_cols = [
             "아파트명",
-            "주소(시도)",
+            # "주소(시도)",
             "주소(시군구)",
             "주소(읍면동)",
+            "전용면적",
+            "세대수",
+            "거래금액(만원)",
+            "초품아",
+            "연차",
             "복도유형",
             "난방방식",
-            "세대수",
             "주차대수_세대당",
-            "연차",
-            "전용면적",
-            "거래금액(만원)",
         ]
         sorted_df = df.sort_values(["거래금액(만원)", "연차"], ascending=[True, True])
         result = sorted_df[show_cols].head(limit)
@@ -591,7 +611,7 @@ class ApartmentSearchTool:
 
 
 def create_apartment_search_agent(
-    csv_path: str | Path = "./data/apt_basic_info.csv",
+    csv_path: str | Path = "./data/apt_basic_info_school.csv",
     credential=None,
 ):
     from agent_framework.azure import AzureOpenAIChatClient
@@ -609,7 +629,7 @@ def create_apartment_search_agent(
             "결과가 JSON으로 반환되면 반드시 total_count(전체 건수)와 returned_count(표시 건수)를 먼저 명시하고 "
             "'상위 N건' 형태로 표를 보여줘라. "
             "멀티턴 대화에서는 반드시 같은 thread_id를 유지해서 호출해라. "
-            "이전 조건에 추가 조건이면 memory_mode='append'를 사용해라. "
+            # "이전 조건에 추가 조건이면 memory_mode='append'를 사용해라. "
             "사용자가 '초기화'를 요청하면 reset_apartment_search_memory를 호출해라. "
             "사용자가 특정 조건만 빼거나 제외 해달라고 하면 memory_mode='append'에서 clear_filters를 사용해라. "
             "예: '금액 필터 빼줘', '연차 조건 제외', '난방 조건 제거'"
